@@ -15,6 +15,12 @@ def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
     suffix = pathlib.Path(uploaded_file.name).suffix.lower()
     if suffix == ".csv":
         return pd.read_csv(uploaded_file)
+    if suffix == ".xlsb":
+        try:
+            return pd.read_excel(uploaded_file, engine="pyxlsb")
+        except ImportError:
+            st.error("Reading .xlsb files requires the pyxlsb package. Please install it and retry.")
+            st.stop()
     return pd.read_excel(uploaded_file)
 
 
@@ -30,16 +36,17 @@ def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
     return result
 
 
-def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, List[str]]]) -> pd.DataFrame:
+def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, object]]) -> pd.DataFrame:
     result = data
     for col, f in filts.items():
+        threshold = f.get("threshold", 80)
         if f["include_exact"]:
             result = result[result[col].astype(str).isin(f["include_exact"])]
         if f["include_fuzzy"]:
             result = result[
                 result[col]
                 .astype(str)
-                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= 80 for term in f["include_fuzzy"]))
+                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= threshold for term in f["include_fuzzy"]))
             ]
         if f["exclude_exact"]:
             result = result[~result[col].astype(str).isin(f["exclude_exact"])]
@@ -47,7 +54,7 @@ def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, List[str]]]) ->
             result = result[
                 ~result[col]
                 .astype(str)
-                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= 80 for term in f["exclude_fuzzy"]))
+                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= threshold for term in f["exclude_fuzzy"]))
             ]
     return result
 
@@ -59,6 +66,7 @@ def snapshot_state(fields: List[str]) -> Dict[str, object]:
         state[f"inc_fuzzy_{field}"] = st.session_state.get(f"inc_fuzzy_{field}", "")
         state[f"exc_exact_{field}"] = st.session_state.get(f"exc_exact_{field}", [])
         state[f"exc_fuzzy_{field}"] = st.session_state.get(f"exc_fuzzy_{field}", "")
+        state[f"threshold_{field}"] = st.session_state.get(f"threshold_{field}", 80)
     return state
 
 
@@ -91,7 +99,7 @@ with st.sidebar:
         st.error("Please select at least one field to continue.")
         st.stop()
 
-    filters: Dict[str, Dict[str, List[str]]] = {}
+    filters: Dict[str, Dict[str, object]] = {}
     has_keyword = False
 
     for field in fields:
@@ -110,6 +118,9 @@ with st.sidebar:
         exc_fuzzy_raw = st.text_input(
             f"Fuzzy keywords to exclude from {field} (comma separated)",
             key=f"exc_fuzzy_{field}",
+        )
+        threshold = st.slider(
+            f"Fuzzy match threshold for {field}", 0, 100, 80, key=f"threshold_{field}"
         )
 
         inc_fuzzy = [s.strip() for s in inc_fuzzy_raw.split(",") if s.strip()]
@@ -133,6 +144,7 @@ with st.sidebar:
             "include_fuzzy": inc_fuzzy,
             "exclude_exact": exc_exact,
             "exclude_fuzzy": exc_fuzzy,
+            "threshold": threshold,
         }
         if any([inc_exact, inc_fuzzy, exc_exact, exc_fuzzy]):
             has_keyword = True
@@ -155,7 +167,7 @@ with st.sidebar:
 
 filter_state = st.session_state.get("filter_state", {})
 fields = filter_state.get("fields_selection", [])
-filters: Dict[str, Dict[str, List[str]]] = {}
+filters: Dict[str, Dict[str, object]] = {}
 for field in fields:
     inc_fuzzy = [s.strip() for s in filter_state.get(f"inc_fuzzy_{field}", "").split(",") if s.strip()]
     exc_fuzzy = [s.strip() for s in filter_state.get(f"exc_fuzzy_{field}", "").split(",") if s.strip()]
@@ -164,12 +176,13 @@ for field in fields:
         "include_fuzzy": inc_fuzzy,
         "exclude_exact": filter_state.get(f"exc_exact_{field}", []),
         "exclude_fuzzy": exc_fuzzy,
+        "threshold": filter_state.get(f"threshold_{field}", 80),
     }
 
 result = apply_filters(df, filters) if filters else df
 
 st.subheader("Preview of results")
-st.dataframe(result.head(100))
+st.dataframe(result.head(100), use_container_width=True)
 
 csv_data = result.to_csv(index=False).encode("utf-8")
 st.download_button(
