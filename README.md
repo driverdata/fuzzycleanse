@@ -7,7 +7,7 @@ A Streamlit application for uploading, joining, searching and cleansing datasets
 - Select fields to search.
 - Include or exclude keywords with exact or fuzzy matching powered by [rapidfuzz](https://github.com/maxbachmann/RapidFuzz).
 - Filters live in a scrollable sidebar and update results when you press Enter.
-- Preview the cleansed dataset and download the results.
+- Preview the cleansed dataset and download the results as CSV or Excel.
 - Adjust fuzzy match thresholds per field for advanced tuning.
 - Supports .xlsb files via the [pyxlsb](https://github.com/www999x/pyxlsb) engine.
 

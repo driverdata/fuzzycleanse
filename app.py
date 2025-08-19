@@ -32,8 +32,19 @@ def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
         st.stop()
     result = frames[0]
     for f in frames[1:]:
-        result = result.merge(f, how="outer", on=list(common))
+        overlap = set(result.columns).intersection(set(f.columns)) - common
+        if overlap:
+            f = f.rename(columns={c: f"{c}__src" for c in overlap})
+        result = result.merge(f, how="outer", on=sorted(common))
+    st.caption(
+        f"Joined on: {', '.join(sorted(common))} • Rows: {len(result):,} • Columns: {len(result.columns):,}"
+    )
     return result
+
+
+def _match_any(x, terms, threshold):
+    x = str(x).lower()
+    return any(fuzz.partial_ratio(x, t.lower()) >= threshold for t in terms)
 
 
 def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, object]]) -> pd.DataFrame:
@@ -44,17 +55,13 @@ def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, object]]) -> pd
             result = result[result[col].astype(str).isin(f["include_exact"])]
         if f["include_fuzzy"]:
             result = result[
-                result[col]
-                .astype(str)
-                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= threshold for term in f["include_fuzzy"]))
+                result[col].apply(lambda x: _match_any(x, f["include_fuzzy"], threshold))
             ]
         if f["exclude_exact"]:
             result = result[~result[col].astype(str).isin(f["exclude_exact"])]
         if f["exclude_fuzzy"]:
             result = result[
-                ~result[col]
-                .astype(str)
-                .apply(lambda x: any(fuzz.partial_ratio(x, term) >= threshold for term in f["exclude_fuzzy"]))
+                ~result[col].apply(lambda x: _match_any(x, f["exclude_fuzzy"], threshold))
             ]
     return result
 
@@ -190,5 +197,14 @@ st.download_button(
     data=csv_data,
     file_name="cleansed.csv",
     mime="text/csv",
+)
+
+excel_buf = BytesIO()
+result.to_excel(excel_buf, index=False)
+st.download_button(
+    "Download as Excel",
+    data=excel_buf.getvalue(),
+    file_name="cleansed.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
