@@ -24,12 +24,16 @@ def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
     return pd.read_excel(uploaded_file)
 
 
+
+
 def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
+    """Join multiple DataFrames on common columns."""
     """Join multiple DataFrames on common columns with normalized key dtypes."""
     common = set(frames[0].columns).intersection(*(set(f.columns) for f in frames[1:]))
     if not common:
         st.error("Uploaded files do not share common fields and cannot be joined.")
         st.stop()
+
 
     def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         frame = frame.copy()
@@ -42,6 +46,10 @@ def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
     normalized = [normalize(f) for f in frames]
     result = normalized[0]
     for f in normalized[1:]:
+
+    result = frames[0]
+    for f in frames[1:]:
+
         overlap = set(result.columns).intersection(set(f.columns)) - common
         if overlap:
             f = f.rename(columns={c: f"{c}__src" for c in overlap})
