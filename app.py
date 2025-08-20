@@ -1,6 +1,7 @@
 from pathlib import Path
 from io import BytesIO
 from typing import Dict, List, Tuple
+from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -124,7 +125,13 @@ def main() -> None:
     def show_df(df: pd.DataFrame) -> None:
         """Render ``df`` with interactive column resizing."""
         config = {c: st.column_config.Column(disabled=True) for c in df.columns}
-        st.data_editor(df, use_container_width=True, column_config=config, hide_index=True)
+        st.data_editor(
+            df,
+            use_container_width=True,
+            column_config=config,
+            hide_index=True,
+            key=f"data_editor_{uuid4().hex}",
+        )
 
     display = st.container()
     with display:
