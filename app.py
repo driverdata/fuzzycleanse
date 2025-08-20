@@ -122,8 +122,9 @@ def main() -> None:
     frames = [read_file(f) for f in uploaded_files]
 
     def show_df(df: pd.DataFrame) -> None:
-        """Render ``df`` allowing columns to be resized interactively."""
-        st.dataframe(df, use_container_width=True)
+        """Render ``df`` with interactive column resizing."""
+        config = {c: st.column_config.Column(disabled=True) for c in df.columns}
+        st.data_editor(df, use_container_width=True, column_config=config, hide_index=True)
 
     display = st.container()
     with display:
@@ -188,7 +189,6 @@ def main() -> None:
             st.stop()
 
         filters: Dict[str, Dict[str, object]] = {}
-        has_keyword = False
 
         for field in fields:
             st.subheader(f"Filters for `{field}`")
@@ -227,6 +227,12 @@ def main() -> None:
                 )
                 st.markdown(tags, unsafe_allow_html=True)
 
+            if st.button(f"Clear {field} filter", key=f"clear_{field}"):
+                for prefix in ("inc_exact_", "inc_fuzzy_", "exc_exact_", "exc_fuzzy_", "threshold_"):
+                    st.session_state.pop(f"{prefix}{field}", None)
+                    st.session_state.filter_state.pop(f"{prefix}{field}", None)
+                st.rerun()
+
             filters[field] = {
                 "include_exact": inc_exact,
                 "include_fuzzy": inc_fuzzy,
@@ -234,11 +240,6 @@ def main() -> None:
                 "exclude_fuzzy": exc_fuzzy,
                 "threshold": threshold,
             }
-            if any([inc_exact, inc_fuzzy, exc_exact, exc_fuzzy]):
-                has_keyword = True
-
-        if not has_keyword:
-            st.stop()
 
         current_state = snapshot_state(fields)
         if not st.session_state.history or st.session_state.history[-1] != current_state:
@@ -250,6 +251,14 @@ def main() -> None:
                 st.session_state.history.pop()
                 st.session_state.filter_state = st.session_state.history[-1]
                 st.rerun()
+
+        if st.button("Clear all filters"):
+            for key in list(st.session_state.keys()):
+                if key.startswith(("inc_exact_", "inc_fuzzy_", "exc_exact_", "exc_fuzzy_", "threshold_", "fields_selection")):
+                    del st.session_state[key]
+            st.session_state.filter_state = {}
+            st.session_state.history = []
+            st.rerun()
 
     filter_state = st.session_state.get("filter_state", {})
     fields = filter_state.get("fields_selection", [])
@@ -267,8 +276,10 @@ def main() -> None:
 
     result = apply_filters(df, filters) if filters else df
 
-    st.subheader("Preview of results")
-    show_df(result)
+    display.empty()
+    with display:
+        st.subheader("Preview of results")
+        show_df(result)
 
     csv_data = result.to_csv(index=False).encode("utf-8")
     st.download_button(
