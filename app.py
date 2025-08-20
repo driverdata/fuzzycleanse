@@ -1,4 +1,4 @@
-import pathlib
+from pathlib import Path
 from io import BytesIO
 from typing import Dict, List
 
@@ -11,8 +11,8 @@ st.title("FuzzyCleanse - Dataset Cleanser")
 
 
 def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
-    """Read uploaded file into a DataFrame supporting csv and Excel formats."""
-    suffix = pathlib.Path(uploaded_file.name).suffix.lower()
+    """Read uploaded file into a DataFrame supporting CSV and Excel formats."""
+    suffix = Path(uploaded_file.name).suffix.lower()
     if suffix == ".csv":
         return pd.read_csv(uploaded_file)
     if suffix == ".xlsb":
@@ -23,17 +23,12 @@ def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
             st.stop()
     return pd.read_excel(uploaded_file)
 
-
-
-
 def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
-    """Join multiple DataFrames on common columns."""
     """Join multiple DataFrames on common columns with normalized key dtypes."""
     common = set(frames[0].columns).intersection(*(set(f.columns) for f in frames[1:]))
     if not common:
         st.error("Uploaded files do not share common fields and cannot be joined.")
         st.stop()
-
 
     def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         frame = frame.copy()
@@ -43,26 +38,24 @@ def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
             frame[col] = series
         return frame
 
-    normalized = [normalize(f) for f in frames]
-    result = normalized[0]
-    for f in normalized[1:]:
-
+    frames = [normalize(f) for f in frames]
     result = frames[0]
     for f in frames[1:]:
-
         overlap = set(result.columns).intersection(set(f.columns)) - common
         if overlap:
             f = f.rename(columns={c: f"{c}__src" for c in overlap})
         result = result.merge(f, how="outer", on=sorted(common))
+
     st.caption(
         f"Joined on: {', '.join(sorted(common))} • Rows: {len(result):,} • Columns: {len(result.columns):,}"
     )
     return result
 
 
-def _match_any(x, terms, threshold):
-    x = str(x).lower()
-    return any(fuzz.partial_ratio(x, t.lower()) >= threshold for t in terms)
+def _match_any(x: object, terms: List[str], threshold: int) -> bool:
+    """Return True if any fuzzy match meets the given threshold."""
+    x_str = str(x).lower()
+    return any(fuzz.partial_ratio(x_str, t.lower()) >= threshold for t in terms)
 
 
 def apply_filters(data: pd.DataFrame, filts: Dict[str, Dict[str, object]]) -> pd.DataFrame:
