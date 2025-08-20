@@ -40,6 +40,7 @@ def join_frames(frames: List[pd.DataFrame]) -> Tuple[pd.DataFrame, Dict[str, int
         for col in common:
             series = frame[col].astype("string")
             series = series.str.replace(r"\.0+$", "", regex=True)
+            series = series.str.strip()
             frame[col] = series
         return frame
 
