@@ -25,7 +25,7 @@ def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
 
 
 def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
-    """Join multiple DataFrames on common columns."""
+    """Join multiple DataFrames on common columns with normalized key dtypes."""
     common = set(frames[0].columns).intersection(*(set(f.columns) for f in frames[1:]))
     if not common:
         st.error("Uploaded files do not share common fields and cannot be joined.")
