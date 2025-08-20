@@ -34,3 +34,13 @@ def test_no_join_download_names():
     names = ['first.csv', 'second.csv']
     files = [f"{Path(n).stem}-edited.csv" for n in names]
     assert files == ['first-edited.csv', 'second-edited.csv']
+
+
+def test_join_strips_whitespace():
+    df1 = pd.DataFrame({'id': ['1 ', ' 2'], 'v1': [10, 20]})
+    df2 = pd.DataFrame({'id': ['1', '2'], 'v2': [30, 40]})
+    res = perform_join([df1, df2])
+    assert res['ok']
+    assert res['meta']['outputRows'] == 2
+    assert res['data']['v1'].isna().sum() == 0
+    assert res['data']['v2'].isna().sum() == 0
