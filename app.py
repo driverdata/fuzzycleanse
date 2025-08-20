@@ -1,6 +1,6 @@
 from pathlib import Path
 from io import BytesIO
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -23,12 +23,17 @@ def read_file(uploaded_file: BytesIO) -> pd.DataFrame:
             st.stop()
     return pd.read_excel(uploaded_file)
 
-def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
-    """Join multiple DataFrames on common columns with normalized key dtypes."""
+def join_frames(frames: List[pd.DataFrame]) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """Join multiple DataFrames on common columns with normalized key dtypes.
+
+    The verbose caption previously emitted is removed. Instead, metadata about
+    the operation is returned alongside the DataFrame so callers can display a
+    short status message.
+    """
+
     common = set(frames[0].columns).intersection(*(set(f.columns) for f in frames[1:]))
     if not common:
-        st.error("Uploaded files do not share common fields and cannot be joined.")
-        st.stop()
+        raise ValueError("no common key")
 
     def normalize(frame: pd.DataFrame) -> pd.DataFrame:
         frame = frame.copy()
@@ -46,10 +51,17 @@ def join_frames(frames: List[pd.DataFrame]) -> pd.DataFrame:
             f = f.rename(columns={c: f"{c}__src" for c in overlap})
         result = result.merge(f, how="outer", on=sorted(common))
 
-    st.caption(
-        f"Joined on: {', '.join(sorted(common))} • Rows: {len(result):,} • Columns: {len(result.columns):,}"
-    )
-    return result
+    meta = {"inputCount": len(frames), "outputRows": len(result)}
+    return result, meta
+
+
+def perform_join(frames: List[pd.DataFrame]) -> Dict[str, object]:
+    """Wrapper around ``join_frames`` capturing success/failure information."""
+    try:
+        joined, meta = join_frames(frames)
+        return {"ok": True, "data": joined, "meta": meta}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {"ok": False, "reason": str(exc)}
 
 
 def _match_any(x: object, terms: List[str], threshold: int) -> bool:
@@ -88,134 +100,187 @@ def snapshot_state(fields: List[str]) -> Dict[str, object]:
     return state
 
 
-with st.sidebar:
-    st.header("Settings")
+# ---------------------------------------------------------------------------
+# Uploader, display, and filtering
+# ---------------------------------------------------------------------------
 
-    uploaded_files = st.file_uploader(
-        "Upload CSV or Excel files",
-        type=["csv", "xls", "xlsx", "xlsm", "xlsb"],
-        accept_multiple_files=True,
-    )
+
+def main() -> None:
+    with st.sidebar:
+        st.header("Settings")
+        uploaded_files = st.file_uploader(
+            "Upload CSV or Excel files",
+            type=["csv", "xls", "xlsx", "xlsm", "xlsb"],
+            accept_multiple_files=True,
+        )
 
     if not uploaded_files:
         st.error("Please upload at least one file to continue.")
         st.stop()
 
     frames = [read_file(f) for f in uploaded_files]
-    df = join_frames(frames)
 
-    if "filter_state" not in st.session_state:
-        st.session_state.filter_state = {}
-    if "history" not in st.session_state:
-        st.session_state.history = []
+    display = st.container()
+    with display:
+        if len(frames) >= 2:
+            choice = st.session_state.get("join_choice")
+            if choice is None:
+                st.write("Join these datasets now?")
+                yes_col, no_col = st.columns(2)
+                if yes_col.button("Yes"):
+                    st.session_state.join_choice = True
+                    st.experimental_rerun()
+                if no_col.button("No"):
+                    st.session_state.join_choice = False
+                    st.experimental_rerun()
+                for f, frame in zip(uploaded_files, frames):
+                    st.caption(f"{f.name}: {len(frame)} rows, {len(frame.columns)} columns")
+            elif choice:
+                res = perform_join(frames)
+                if res["ok"]:
+                    st.session_state.current_df = res["data"]
+                    st.success("Join successful.")
+                    st.dataframe(res["data"].head(100), use_container_width=True)
+                else:
+                    st.warning(f"Join failed: {res['reason']}")
+                    if st.button("Back to sources"):
+                        st.session_state.join_choice = False
+                        st.experimental_rerun()
+            else:
+                tabs = st.tabs([f.name for f in uploaded_files])
+                for i, (tab, frame) in enumerate(zip(tabs, frames)):
+                    with tab:
+                        st.dataframe(frame.head(100), use_container_width=True)
+                        csv = frame.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            "Download source",
+                            data=csv,
+                            file_name=f"{Path(uploaded_files[i].name).stem}-edited.csv",
+                            mime="text/csv",
+                            key=f"dl_src_{i}",
+                        )
+                st.session_state.current_df = frames[0]
+        else:
+            st.session_state.join_choice = True
+            st.session_state.current_df = frames[0]
+            st.dataframe(frames[0].head(100), use_container_width=True)
 
-    for k, v in st.session_state.filter_state.items():
-        st.session_state[k] = v
+    df = st.session_state.get("current_df")
 
-    fields = st.multiselect("Select field(s) to search", list(df.columns), key="fields_selection")
-    if not fields:
-        st.error("Please select at least one field to continue.")
-        st.stop()
+    with st.sidebar:
+        if "filter_state" not in st.session_state:
+            st.session_state.filter_state = {}
+        if "history" not in st.session_state:
+            st.session_state.history = []
 
+        for k, v in st.session_state.filter_state.items():
+            st.session_state[k] = v
+
+        fields = st.multiselect("Select field(s) to search", list(df.columns), key="fields_selection")
+        if not fields:
+            st.stop()
+
+        filters: Dict[str, Dict[str, object]] = {}
+        has_keyword = False
+
+        for field in fields:
+            st.subheader(f"Filters for `{field}`")
+            values = sorted(df[field].dropna().astype(str).unique())
+            inc_exact = st.multiselect(
+                f"Exact values to include from {field}", values, key=f"inc_exact_{field}"
+            )
+            inc_fuzzy_raw = st.text_input(
+                f"Fuzzy keywords to include in {field} (comma separated)",
+                key=f"inc_fuzzy_{field}",
+            )
+            exc_exact = st.multiselect(
+                f"Exact values to exclude from {field}", values, key=f"exc_exact_{field}"
+            )
+            exc_fuzzy_raw = st.text_input(
+                f"Fuzzy keywords to exclude from {field} (comma separated)",
+                key=f"exc_fuzzy_{field}",
+            )
+            threshold = st.slider(
+                f"Fuzzy match threshold for {field}", 0, 100, 80, key=f"threshold_{field}"
+            )
+
+            inc_fuzzy = [s.strip() for s in inc_fuzzy_raw.split(",") if s.strip()]
+            exc_fuzzy = [s.strip() for s in exc_fuzzy_raw.split(",") if s.strip()]
+
+            if inc_fuzzy:
+                tags = "".join(
+                    f"<span style='background-color:#90EE90;padding:2px 6px;border-radius:4px;margin-right:4px;'>{t}</span>"
+                    for t in inc_fuzzy
+                )
+                st.markdown(tags, unsafe_allow_html=True)
+            if exc_fuzzy:
+                tags = "".join(
+                    f"<span style='background-color:#FF7F7F;padding:2px 6px;border-radius:4px;margin-right:4px;'>{t}</span>"
+                    for t in exc_fuzzy
+                )
+                st.markdown(tags, unsafe_allow_html=True)
+
+            filters[field] = {
+                "include_exact": inc_exact,
+                "include_fuzzy": inc_fuzzy,
+                "exclude_exact": exc_exact,
+                "exclude_fuzzy": exc_fuzzy,
+                "threshold": threshold,
+            }
+            if any([inc_exact, inc_fuzzy, exc_exact, exc_fuzzy]):
+                has_keyword = True
+
+        if not has_keyword:
+            st.stop()
+
+        current_state = snapshot_state(fields)
+        if not st.session_state.history or st.session_state.history[-1] != current_state:
+            st.session_state.history.append(current_state)
+        st.session_state.filter_state = current_state
+
+        if st.button("Undo last change"):
+            if len(st.session_state.history) > 1:
+                st.session_state.history.pop()
+                st.session_state.filter_state = st.session_state.history[-1]
+                st.experimental_rerun()
+
+    filter_state = st.session_state.get("filter_state", {})
+    fields = filter_state.get("fields_selection", [])
     filters: Dict[str, Dict[str, object]] = {}
-    has_keyword = False
-
     for field in fields:
-        st.subheader(f"Filters for `{field}`")
-        values = sorted(df[field].dropna().astype(str).unique())
-        inc_exact = st.multiselect(
-            f"Exact values to include from {field}", values, key=f"inc_exact_{field}"
-        )
-        inc_fuzzy_raw = st.text_input(
-            f"Fuzzy keywords to include in {field} (comma separated)",
-            key=f"inc_fuzzy_{field}",
-        )
-        exc_exact = st.multiselect(
-            f"Exact values to exclude from {field}", values, key=f"exc_exact_{field}"
-        )
-        exc_fuzzy_raw = st.text_input(
-            f"Fuzzy keywords to exclude from {field} (comma separated)",
-            key=f"exc_fuzzy_{field}",
-        )
-        threshold = st.slider(
-            f"Fuzzy match threshold for {field}", 0, 100, 80, key=f"threshold_{field}"
-        )
-
-        inc_fuzzy = [s.strip() for s in inc_fuzzy_raw.split(",") if s.strip()]
-        exc_fuzzy = [s.strip() for s in exc_fuzzy_raw.split(",") if s.strip()]
-
-        if inc_fuzzy:
-            tags = "".join(
-                f"<span style='background-color:#90EE90;padding:2px 6px;border-radius:4px;margin-right:4px;'>{t}</span>"
-                for t in inc_fuzzy
-            )
-            st.markdown(tags, unsafe_allow_html=True)
-        if exc_fuzzy:
-            tags = "".join(
-                f"<span style='background-color:#FF7F7F;padding:2px 6px;border-radius:4px;margin-right:4px;'>{t}</span>"
-                for t in exc_fuzzy
-            )
-            st.markdown(tags, unsafe_allow_html=True)
-
+        inc_fuzzy = [s.strip() for s in filter_state.get(f"inc_fuzzy_{field}", "").split(",") if s.strip()]
+        exc_fuzzy = [s.strip() for s in filter_state.get(f"exc_fuzzy_{field}", "").split(",") if s.strip()]
         filters[field] = {
-            "include_exact": inc_exact,
+            "include_exact": filter_state.get(f"inc_exact_{field}", []),
             "include_fuzzy": inc_fuzzy,
-            "exclude_exact": exc_exact,
+            "exclude_exact": filter_state.get(f"exc_exact_{field}", []),
             "exclude_fuzzy": exc_fuzzy,
-            "threshold": threshold,
+            "threshold": filter_state.get(f"threshold_{field}", 80),
         }
-        if any([inc_exact, inc_fuzzy, exc_exact, exc_fuzzy]):
-            has_keyword = True
 
-    if not has_keyword:
-        st.error("Please provide at least one keyword for filtering.")
-        st.stop()
+    result = apply_filters(df, filters) if filters else df
 
-    current_state = snapshot_state(fields)
-    if not st.session_state.history or st.session_state.history[-1] != current_state:
-        st.session_state.history.append(current_state)
-    st.session_state.filter_state = current_state
+    st.subheader("Preview of results")
+    st.dataframe(result.head(100), use_container_width=True)
 
-    if st.button("Undo last change"):
-        if len(st.session_state.history) > 1:
-            st.session_state.history.pop()
-            st.session_state.filter_state = st.session_state.history[-1]
-            st.experimental_rerun()
+    csv_data = result.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download cleansed data",
+        data=csv_data,
+        file_name="cleansed.csv" if st.session_state.get("join_choice", True) else f"{Path(uploaded_files[0].name).stem}-edited.csv",
+        mime="text/csv",
+    )
+
+    excel_buf = BytesIO()
+    result.to_excel(excel_buf, index=False)
+    st.download_button(
+        "Download as Excel",
+        data=excel_buf.getvalue(),
+        file_name="cleansed.xlsx" if st.session_state.get("join_choice", True) else f"{Path(uploaded_files[0].name).stem}-edited.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
-filter_state = st.session_state.get("filter_state", {})
-fields = filter_state.get("fields_selection", [])
-filters: Dict[str, Dict[str, object]] = {}
-for field in fields:
-    inc_fuzzy = [s.strip() for s in filter_state.get(f"inc_fuzzy_{field}", "").split(",") if s.strip()]
-    exc_fuzzy = [s.strip() for s in filter_state.get(f"exc_fuzzy_{field}", "").split(",") if s.strip()]
-    filters[field] = {
-        "include_exact": filter_state.get(f"inc_exact_{field}", []),
-        "include_fuzzy": inc_fuzzy,
-        "exclude_exact": filter_state.get(f"exc_exact_{field}", []),
-        "exclude_fuzzy": exc_fuzzy,
-        "threshold": filter_state.get(f"threshold_{field}", 80),
-    }
-
-result = apply_filters(df, filters) if filters else df
-
-st.subheader("Preview of results")
-st.dataframe(result.head(100), use_container_width=True)
-
-csv_data = result.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "Download cleansed data",
-    data=csv_data,
-    file_name="cleansed.csv",
-    mime="text/csv",
-)
-
-excel_buf = BytesIO()
-result.to_excel(excel_buf, index=False)
-st.download_button(
-    "Download as Excel",
-    data=excel_buf.getvalue(),
-    file_name="cleansed.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+if __name__ == "__main__":
+    main()
 
