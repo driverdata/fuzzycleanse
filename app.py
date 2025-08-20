@@ -129,10 +129,10 @@ def main() -> None:
                 yes_col, no_col = st.columns(2)
                 if yes_col.button("Yes"):
                     st.session_state.join_choice = True
-                    st.experimental_rerun()
+                    st.rerun()
                 if no_col.button("No"):
                     st.session_state.join_choice = False
-                    st.experimental_rerun()
+                    st.rerun()
                 for f, frame in zip(uploaded_files, frames):
                     st.caption(f"{f.name}: {len(frame)} rows, {len(frame.columns)} columns")
             elif choice:
@@ -145,7 +145,7 @@ def main() -> None:
                     st.warning(f"Join failed: {res['reason']}")
                     if st.button("Back to sources"):
                         st.session_state.join_choice = False
-                        st.experimental_rerun()
+                        st.rerun()
             else:
                 tabs = st.tabs([f.name for f in uploaded_files])
                 for i, (tab, frame) in enumerate(zip(tabs, frames)):
@@ -166,6 +166,8 @@ def main() -> None:
             st.dataframe(frames[0].head(100), use_container_width=True)
 
     df = st.session_state.get("current_df")
+    if df is None:
+        st.stop()
 
     with st.sidebar:
         if "filter_state" not in st.session_state:
@@ -242,7 +244,7 @@ def main() -> None:
             if len(st.session_state.history) > 1:
                 st.session_state.history.pop()
                 st.session_state.filter_state = st.session_state.history[-1]
-                st.experimental_rerun()
+                st.rerun()
 
     filter_state = st.session_state.get("filter_state", {})
     fields = filter_state.get("fields_selection", [])
