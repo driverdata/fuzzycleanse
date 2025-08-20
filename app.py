@@ -121,6 +121,10 @@ def main() -> None:
 
     frames = [read_file(f) for f in uploaded_files]
 
+    def show_df(df: pd.DataFrame) -> None:
+        """Render ``df`` allowing columns to be resized interactively."""
+        st.dataframe(df, use_container_width=True)
+
     display = st.container()
     with display:
         if len(frames) >= 2:
@@ -141,7 +145,7 @@ def main() -> None:
                 if res["ok"]:
                     st.session_state.current_df = res["data"]
                     st.success("Join successful.")
-                    st.dataframe(res["data"], use_container_width=True)
+                    show_df(res["data"])
                 else:
                     st.warning(f"Join failed: {res['reason']}")
                     if st.button("Back to sources"):
@@ -151,7 +155,7 @@ def main() -> None:
                 tabs = st.tabs([f.name for f in uploaded_files])
                 for i, (tab, frame) in enumerate(zip(tabs, frames)):
                     with tab:
-                        st.dataframe(frame, use_container_width=True)
+                        show_df(frame)
                         csv = frame.to_csv(index=False).encode("utf-8")
                         st.download_button(
                             "Download source",
@@ -164,7 +168,7 @@ def main() -> None:
         else:
             st.session_state.join_choice = True
             st.session_state.current_df = frames[0]
-            st.dataframe(frames[0], use_container_width=True)
+            show_df(frames[0])
 
     df = st.session_state.get("current_df")
     if df is None:
@@ -264,7 +268,7 @@ def main() -> None:
     result = apply_filters(df, filters) if filters else df
 
     st.subheader("Preview of results")
-    st.dataframe(result, use_container_width=True)
+    show_df(result)
 
     csv_data = result.to_csv(index=False).encode("utf-8")
     st.download_button(
