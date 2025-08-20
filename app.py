@@ -141,7 +141,7 @@ def main() -> None:
                 if res["ok"]:
                     st.session_state.current_df = res["data"]
                     st.success("Join successful.")
-                    st.dataframe(res["data"].head(100), use_container_width=True)
+                    st.dataframe(res["data"], use_container_width=True)
                 else:
                     st.warning(f"Join failed: {res['reason']}")
                     if st.button("Back to sources"):
@@ -151,7 +151,7 @@ def main() -> None:
                 tabs = st.tabs([f.name for f in uploaded_files])
                 for i, (tab, frame) in enumerate(zip(tabs, frames)):
                     with tab:
-                        st.dataframe(frame.head(100), use_container_width=True)
+                        st.dataframe(frame, use_container_width=True)
                         csv = frame.to_csv(index=False).encode("utf-8")
                         st.download_button(
                             "Download source",
@@ -164,7 +164,7 @@ def main() -> None:
         else:
             st.session_state.join_choice = True
             st.session_state.current_df = frames[0]
-            st.dataframe(frames[0].head(100), use_container_width=True)
+            st.dataframe(frames[0], use_container_width=True)
 
     df = st.session_state.get("current_df")
     if df is None:
@@ -264,7 +264,7 @@ def main() -> None:
     result = apply_filters(df, filters) if filters else df
 
     st.subheader("Preview of results")
-    st.dataframe(result.head(100), use_container_width=True)
+    st.dataframe(result, use_container_width=True)
 
     csv_data = result.to_csv(index=False).encode("utf-8")
     st.download_button(
